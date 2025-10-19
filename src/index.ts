@@ -15,6 +15,9 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import { exec } from "child_process";
 import { promisify } from "util";
+import { writeFile, unlink } from "fs/promises";
+import { tmpdir } from "os";
+import { join } from "path";
 
 // Promisify exec for async/await usage
 const execAsync = promisify(exec);
@@ -113,6 +116,7 @@ async function checkMathematicaInstallation(): Promise<boolean> {
 
 /**
  * Execute Mathematica code and return the result
+ * Uses temporary file approach to avoid shell escaping issues
  */
 async function executeMathematicaCode(code: string, format: string = "text"): Promise<string> {
   let formatOption = "";
@@ -131,12 +135,18 @@ async function executeMathematicaCode(code: string, format: string = "text"): Pr
       break;
   }
 
+  // Generate a unique temporary file path
+  const tempFileName = `mcp_mathematica_${Date.now()}_${Math.random().toString(36).substring(7)}.wl`;
+  const tempFilePath = join(tmpdir(), tempFileName);
+
   try {
     log('API', 'Executing Mathematica code', { code: code.substring(0, 100) + (code.length > 100 ? '...' : '') });
 
-    // Execute the code using wolframscript
-    // The -code flag allows passing Mathematica code directly
-    const { stdout, stderr } = await execAsync(`wolframscript ${formatOption} -code "${code.replace(/"/g, '\\"')}"`);
+    // Write code to temporary file
+    await writeFile(tempFilePath, code, 'utf8');
+
+    // Execute using the -file flag instead of -code to avoid shell escaping issues
+    const { stdout, stderr } = await execAsync(`wolframscript ${formatOption} -file "${tempFilePath}"`);
 
     if (stderr) {
       log('Warning', 'Mathematica execution produced stderr output', stderr);
@@ -150,6 +160,13 @@ async function executeMathematicaCode(code: string, format: string = "text"): Pr
       ErrorCode.InternalError,
       `Failed to execute Mathematica code: ${error.message}`
     );
+  } finally {
+    // Clean up temporary file
+    try {
+      await unlink(tempFilePath);
+    } catch (unlinkError) {
+      log('Warning', 'Failed to delete temporary file', { path: tempFilePath, error: unlinkError });
+    }
   }
 }
 
